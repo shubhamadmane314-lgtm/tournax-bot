@@ -1,5 +1,15 @@
+const http = require('http');
 const TelegramBot = require('node-telegram-bot-api');
 const admin = require('firebase-admin');
+
+// Render Web Service साठी HTTP Port Binding (Server Live राहण्यासाठी)
+const port = process.env.PORT || 3000;
+http.createServer((req, res) => {
+  res.writeHead(200, { 'Content-Type': 'text/plain' });
+  res.end('TOURNAX Bot is active and running 24/7!\n');
+}).listen(port, () => {
+  console.log(`Web server listening on port ${port}`);
+});
 
 // Firebase Admin Setup
 const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
@@ -85,7 +95,7 @@ bot.onText(/\/results/, async (msg) => {
     snapshot.forEach(doc => {
       const data = doc.data();
       reply += `✅ *${data.name || 'Tournament'}*\n` +
-               `🎮 Mode: ${data.mode} | Status: Completed\n\n`;
+               `🎮 Mode: ${data.mode || 'SOLO'} | Status: Completed\n\n`;
     });
     bot.sendMessage(chatId, reply, { parse_mode: 'Markdown' });
   } catch (error) {
@@ -158,5 +168,5 @@ async function sendUpcomingTournaments(chatId) {
   } catch (error) {
     bot.sendMessage(chatId, "टूर्नामेंट्स लोड करताना त्रुटी आली.");
   }
-    }
-    
+           }
+        
