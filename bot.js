@@ -2,16 +2,16 @@ const http = require('http');
 const TelegramBot = require('node-telegram-bot-api');
 const admin = require('firebase-admin');
 
-// 1. Render Keep-Alive Server
+// 1. Render Keep-Alive Web Server
 const port = process.env.PORT || 10000;
 http.createServer((req, res) => {
   res.writeHead(200, { 'Content-Type': 'text/plain' });
-  res.end('TOURNAX Automated Engine Running 24/7\n');
+  res.end('TOURNAX Engine Active & Running 24/7\n');
 }).listen(port, () => {
   console.log(`Web server listening on port ${port}`);
 });
 
-// 2. Firebase Admin Initialization
+// 2. Firebase Admin Setup
 try {
   const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
   admin.initializeApp({
@@ -19,11 +19,11 @@ try {
   });
   console.log('Firebase connected successfully');
 } catch (e) {
-  console.error('Firebase Error:', e.message);
+  console.error('Firebase Setup Error:', e.message);
 }
 const db = admin.firestore();
 
-// 3. Telegram Bot Initialization
+// 3. Telegram Bot Setup
 const token = (process.env.TELEGRAM_BOT_TOKEN || '').trim();
 const bot = new TelegramBot(token, { polling: true });
 
@@ -31,7 +31,7 @@ bot.on('polling_error', (err) => {
   console.error('Polling Error:', err.message);
 });
 
-// Helper: Main Menu Keyboard (English)
+// Helper: Main Menu Keyboard
 function getMainMenu() {
   return {
     reply_markup: {
@@ -66,7 +66,7 @@ bot.onText(/\/start/, (msg) => {
   bot.sendMessage(chatId, welcomeText, getMainMenu()).catch(console.error);
 });
 
-// 5. Callback Query Handler (Button Clicks)
+// 5. Button Clicks Handler (Callback Queries)
 bot.on('callback_query', async (query) => {
   const chatId = query.message.chat.id;
   const action = query.data;
@@ -90,35 +90,60 @@ bot.on('callback_query', async (query) => {
   }
 });
 
-// 6. Direct Commands
-bot.onText(/\/link(?:\s+(.+))?/, async (msg, match) => {
-  const chatId = msg.chat.id;
-  const appUid = match[1] ? match[1].trim() : null;
+// 6. Commands Logic
 
-  if (!appUid) {
+// Link Account: Supports Custom User ID (e.g., TXINYNCG)
+bot.onText(/\/link(.*)/, async (msg, match) => {
+  const chatId = msg.chat.id;
+  const inputId = match[1] ? match[1].trim().toUpperCase() : '';
+
+  if (!inputId) {
     return bot.sendMessage(
       chatId,
-      `⚠️ *Please specify your App User ID.*\n\n*Usage:* \`/link YOUR_APP_USER_ID\`\n(You can find your User ID in the TOURNAX App Profile tab)`,
+      `⚠️ *Please provide your App User ID.*\n\n*Usage:* \`/link TXINYNCG\`\n\n_(You can find your User ID in the TOURNAX App Profile tab)_`,
       { parse_mode: 'Markdown' }
     );
   }
 
   try {
+    // Search in users collection for matching referralCode or customId
+    let userSnap = await db.collection('users').where('referralCode', '==', inputId).limit(1).get();
+
+    if (userSnap.empty) {
+      userSnap = await db.collection('users').where('customId', '==', inputId).limit(1).get();
+    }
+
+    let authUid = null;
+    let userName = msg.from.first_name || 'Player';
+
+    if (!userSnap.empty) {
+      const userDoc = userSnap.docs[0];
+      authUid = userDoc.id;
+      userName = userDoc.data().name || userDoc.data().username || userName;
+    }
+
+    // Save mapping in telegram_users
     await db.collection('telegram_users').doc(String(chatId)).set({
       chatId: chatId,
-      appUid: appUid,
-      username: msg.from.username || '',
+      customId: inputId,
+      authUid: authUid,
+      telegramUsername: msg.from.username || '',
       firstName: msg.from.first_name || '',
       linkedAt: admin.firestore.FieldValue.serverTimestamp()
     }, { merge: true });
 
     bot.sendMessage(
       chatId,
-      `✅ *Account Linked Successfully!*\n\n• *App User ID:* \`${appUid}\`\n• *Telegram Chat ID:* \`${chatId}\`\n\nYou will now receive automated Room ID & Password alerts directly here before your matches!`,
+      `✅ *Account Linked Successfully!* \n\n` +
+      `• *User ID:* \`${inputId}\`\n` +
+      `• *Player Name:* *${userName}*\n` +
+      `• *Telegram ID:* \`${chatId}\`\n\n` +
+      `🎮 All your upcoming Room IDs, match passwords, and alerts will be sent here automatically!`,
       { parse_mode: 'Markdown' }
     );
-  } catch (e) {
-    bot.sendMessage(chatId, `❌ Failed to link account: ${e.message}`);
+  } catch (error) {
+    console.error('Link Error:', error);
+    bot.sendMessage(chatId, `❌ Failed to link account: ${error.message}`);
   }
 });
 
@@ -142,7 +167,8 @@ bot.onText(/\/help/, (msg) => {
   sendHelp(msg.chat.id);
 });
 
-// 7. Helper Business Logic
+// 7. Helper Business Functions
+
 async function sendTournaments(chatId) {
   try {
     const snapshot = await db.collection('tournaments').limit(6).get();
@@ -173,19 +199,26 @@ async function sendTournaments(chatId) {
 async function sendMyMatches(chatId) {
   try {
     const userDoc = await db.collection('telegram_users').doc(String(chatId)).get();
-    if (!userDoc.exists || !userDoc.data().appUid) {
+    if (!userDoc.exists) {
       return bot.sendMessage(
         chatId,
-        `⚠️ *Account not linked yet!*\n\nPlease link your app account first using:\n\`/link YOUR_APP_USER_ID\``,
+        `⚠️ *Account not linked yet!*\n\nPlease link your app account first using:\n\`/link YOUR_USER_ID\``,
         { parse_mode: 'Markdown' }
       );
     }
 
-    const appUid = userDoc.data().appUid;
-    const snap = await db.collection('registrations').where('userId', '==', appUid).limit(5).get();
+    const { customId, authUid } = userDoc.data();
+    let snap = null;
 
-    if (snap.empty) {
-      return bot.sendMessage(chatId, `ℹ️ No registered matches found for User ID: \`${appUid}\`.`, { parse_mode: 'Markdown' });
+    if (authUid) {
+      snap = await db.collection('registrations').where('userId', '==', authUid).limit(5).get();
+    }
+    if ((!snap || snap.empty) && customId) {
+      snap = await db.collection('registrations').where('customId', '==', customId).limit(5).get();
+    }
+
+    if (!snap || snap.empty) {
+      return bot.sendMessage(chatId, `ℹ️ No registered matches found for User ID: \`${customId || authUid}\`.`, { parse_mode: 'Markdown' });
     }
 
     let reply = `🎮 *Your Registered Matches:*\n\n`;
@@ -204,7 +237,7 @@ async function sendMyMatches(chatId) {
 async function sendRoomDetails(chatId) {
   try {
     const userDoc = await db.collection('telegram_users').doc(String(chatId)).get();
-    if (!userDoc.exists || !userDoc.data().appUid) {
+    if (!userDoc.exists) {
       return bot.sendMessage(
         chatId,
         `🔒 *Access Restricted*\n\nPlease link your app account using \`/link <USER_ID>\` to view your active Room ID and Password.`,
@@ -223,12 +256,12 @@ async function sendRoomDetails(chatId) {
         reply += `🏆 *${t.name}*\n` +
                  `🆔 Room ID: \`${t.roomId}\`\n` +
                  `🔑 Password: \`${t.roomPassword}\`\n\n` +
-                 `_Please do not share these details with non-registered players._\n\n`;
+                 `_Please do not share these credentials with non-registered players._\n\n`;
       }
     });
 
     if (!found) {
-      return bot.sendMessage(chatId, "⚠️ *No Room credentials have been released yet.* Details are published 15 minutes before match start.", { parse_mode: 'Markdown' });
+      return bot.sendMessage(chatId, "⚠️ *No Room credentials released yet.* Details are published 15 minutes prior to match schedule.", { parse_mode: 'Markdown' });
     }
 
     bot.sendMessage(chatId, reply, { parse_mode: 'Markdown' });
@@ -240,7 +273,7 @@ async function sendRoomDetails(chatId) {
 function sendLinkInstructions(chatId) {
   const text = `🔗 *How to Link Your Account:*\n\n` +
     `1. Open the *TOURNAX App*\n` +
-    `2. Go to your *Profile* tab and copy your *User ID*\n` +
+    `2. Go to your *Profile* tab and copy your *User ID* (e.g. \`TXINYNCG\`)\n` +
     `3. Send the command here:\n\n` +
     `\`/link YOUR_USER_ID\`\n\n` +
     `_Once linked, your Room IDs and match notifications will be delivered here automatically!_`;
@@ -267,7 +300,7 @@ function sendHelp(chatId) {
   bot.sendMessage(chatId, helpText, { parse_mode: 'Markdown' });
 }
 
-// 8. Automated Background Match Notifier
+// 8. Background Auto-Notifier (Checks queue every 60s)
 setInterval(async () => {
   try {
     const notifySnap = await db.collection('notifications_queue').where('sent', '==', false).limit(10).get();
@@ -281,6 +314,6 @@ setInterval(async () => {
       }
     }
   } catch (e) {
-    // Background worker
+    // Keep background alive
   }
 }, 60000);
