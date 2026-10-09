@@ -12,15 +12,24 @@ http.createServer((req, res) => {
 });
 
 // 2. Firebase Admin Setup
-const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
-admin.initializeApp({
-  credential: admin.credential.cert(serviceAccount)
-});
+try {
+  const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
+  admin.initializeApp({
+    credential: admin.credential.cert(serviceAccount)
+  });
+  console.log('Firebase Admin initialized successfully');
+} catch (e) {
+  console.error('Firebase Admin Error:', e.message);
+}
 const db = admin.firestore();
 
 // 3. Telegram Bot Setup
 const token = (process.env.TELEGRAM_BOT_TOKEN || '').trim();
 const bot = new TelegramBot(token, { polling: true });
+
+bot.on('polling_error', (error) => {
+  console.error('Telegram Polling Error:', error.message);
+});
 
 // Helper: Main Menu Keyboard
 function getMainMenu() {
@@ -45,7 +54,9 @@ bot.onText(/\/start/, (msg) => {
     `येथे तुम्हाला Free Fire चे सर्व आगामी सामने, निकाल आणि महत्त्वाच्या अपडेट्स मिळतील.\n\n` +
     `खालील बटणे वापरा किंवा मेनू मधील कमांड्स निवडा:`;
 
-  bot.sendMessage(chatId, welcomeText, getMainMenu());
+  bot.sendMessage(chatId, welcomeText, getMainMenu()).catch(err => {
+    console.error('Start Message Error:', err.message);
+  });
 });
 
 // 5. Button Clicks (Callback Query Handler)
@@ -53,8 +64,11 @@ bot.on('callback_query', async (query) => {
   const chatId = query.message.chat.id;
   const action = query.data;
 
-  // Telegram ला बटण क्लिक झाले असल्याचे कळवणे (Loading थांबवण्यासाठी)
-  bot.answerCallbackQuery(query.id);
+  try {
+    await bot.answerCallbackQuery(query.id);
+  } catch (err) {
+    console.error('Callback Answer Error:', err.message);
+  }
 
   if (action === 'cmd_tournaments') {
     await sendUpcomingTournaments(chatId);
@@ -115,6 +129,7 @@ async function sendUpcomingTournaments(chatId) {
     });
     bot.sendMessage(chatId, reply, { parse_mode: 'Markdown' });
   } catch (error) {
+    console.error('Tournaments Load Error:', error.message);
     bot.sendMessage(chatId, "टूर्नामेंट्स लोड करताना त्रुटी आली.");
   }
 }
@@ -138,4 +153,6 @@ function sendHelpMessage(chatId) {
     `/updates - अधिकृत चॅनेलची लिंक\n` +
     `/help - कमांड्सची माहिती`;
   bot.sendMessage(chatId, helpText, { parse_mode: 'Markdown' });
+}
+ parse_mode: 'Markdown' });
 }
