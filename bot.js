@@ -2,28 +2,28 @@ const http = require('http');
 const TelegramBot = require('node-telegram-bot-api');
 const admin = require('firebase-admin');
 
-// 1. Render Web Server
+// 1. Render Keep-Alive Server
 const port = process.env.PORT || 10000;
 http.createServer((req, res) => {
   res.writeHead(200, { 'Content-Type': 'text/plain' });
-  res.end('TOURNAX Bot Running\n');
+  res.end('TOURNAX Automated Engine Running 24/7\n');
 }).listen(port, () => {
-  console.log(`Server listening on port ${port}`);
+  console.log(`Web server listening on port ${port}`);
 });
 
-// 2. Firebase Setup
+// 2. Firebase Admin Initialization
 try {
   const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
   admin.initializeApp({
     credential: admin.credential.cert(serviceAccount)
   });
-  console.log('Firebase connected');
+  console.log('Firebase connected successfully');
 } catch (e) {
   console.error('Firebase Error:', e.message);
 }
 const db = admin.firestore();
 
-// 3. Telegram Setup
+// 3. Telegram Bot Initialization
 const token = (process.env.TELEGRAM_BOT_TOKEN || '').trim();
 const bot = new TelegramBot(token, { polling: true });
 
@@ -31,28 +31,42 @@ bot.on('polling_error', (err) => {
   console.error('Polling Error:', err.message);
 });
 
-// 4. Start Command
-bot.onText(/\/start/, (msg) => {
-  const chatId = msg.chat.id;
-  const firstName = msg.from.first_name || 'Player';
-
-  const welcomeText = `🎮 *TOURNAX Assistant मध्ये स्वागत आहे, ${firstName}!*\n\nखालील बटणे वापरा किंवा कमांड्स निवडा:`;
-
-  const keyboard = {
+// Helper: Main Menu Keyboard (English)
+function getMainMenu() {
+  return {
     reply_markup: {
       inline_keyboard: [
-        [{ text: '🏆 चालू सामने (Tournaments)', callback_data: 'cmd_tournaments' }],
-        [{ text: '📢 अधिकृत चॅनेल (Updates)', callback_data: 'cmd_updates' }],
-        [{ text: '❓ मदत (Help)', callback_data: 'cmd_help' }]
+        [
+          { text: '🏆 Tournaments', callback_data: 'cmd_tournaments' },
+          { text: '🎮 My Matches', callback_data: 'cmd_my_matches' }
+        ],
+        [
+          { text: '🔑 Room Details', callback_data: 'cmd_rooms' },
+          { text: '👤 Link Account', callback_data: 'cmd_link' }
+        ],
+        [
+          { text: '📢 Official Channel', callback_data: 'cmd_updates' },
+          { text: '❓ Help & Guide', callback_data: 'cmd_help' }
+        ]
       ]
     },
     parse_mode: 'Markdown'
   };
+}
 
-  bot.sendMessage(chatId, welcomeText, keyboard).catch(console.error);
+// 4. /start Command
+bot.onText(/\/start/, (msg) => {
+  const chatId = msg.chat.id;
+  const firstName = msg.from.first_name || 'Player';
+
+  const welcomeText = `🎮 *Welcome to TOURNAX Assistant, ${firstName}!* \n\n` +
+    `Your competitive Free Fire hub. View matches, receive automated Room IDs, link your game profile, and track stats.\n\n` +
+    `Tap the menu buttons below to get started:`;
+
+  bot.sendMessage(chatId, welcomeText, getMainMenu()).catch(console.error);
 });
 
-// 5. Button Clicks Handler
+// 5. Callback Query Handler (Button Clicks)
 bot.on('callback_query', async (query) => {
   const chatId = query.message.chat.id;
   const action = query.data;
@@ -63,6 +77,12 @@ bot.on('callback_query', async (query) => {
 
   if (action === 'cmd_tournaments') {
     await sendTournaments(chatId);
+  } else if (action === 'cmd_my_matches') {
+    await sendMyMatches(chatId);
+  } else if (action === 'cmd_rooms') {
+    await sendRoomDetails(chatId);
+  } else if (action === 'cmd_link') {
+    sendLinkInstructions(chatId);
   } else if (action === 'cmd_updates') {
     sendUpdates(chatId);
   } else if (action === 'cmd_help') {
@@ -71,27 +91,50 @@ bot.on('callback_query', async (query) => {
 });
 
 // 6. Direct Commands
+
+// Feature 2: Link App Account with Telegram (/link <APP_UID>)
+bot.onText(/\/link(?:\s+(.+))?/, async (msg, match) => {
+  const chatId = msg.chat.id;
+  const appUid = match[1] ? match[1].trim() : null;
+
+  if (!appUid) {
+    return bot.sendMessage(
+      chatId,
+      `⚠️ *Please specify your App User ID.*\n\n*Usage:* \`/link YOUR_APP_USER_ID\`\n(You can find your User ID in the TOURNAX App Profile tab)`,
+      { parse_mode: 'Markdown' }
+    );
+  }
+
+  try {
+    await db.collection('telegram_users').doc(String(chatId)).set({
+      chatId: chatId,
+      appUid: appUid,
+      username: msg.from.username || '',
+      firstName: msg.from.first_name || '',
+      linkedAt: admin.firestore.FieldValue.serverTimestamp()
+    }, { merge: true });
+
+    bot.sendMessage(
+      chatId,
+      `✅ *Account Linked Successfully!*\n\n• *App User ID:* \`${appUid}\`\n• *Telegram Chat ID:* \`${chatId}\`\n\nYou will now receive automated Room ID & Password alerts directly here before your matches!`,
+      { parse_mode: 'Markdown' }
+    );
+  } catch (e) {
+    bot.sendMessage(chatId, `❌ Failed to link account: ${e.message}`);
+  }
+});
+
 bot.onText(/\/tournaments/, async (msg) => {
   await sendTournaments(msg.chat.id);
 });
 
-bot.onText(/\/matches/, async (msg) => {
-  const chatId = msg.chat.id;
-  try {
-    const snapshot = await db.collection('tournaments').where('status', '==', 'LIVE').limit(5).get();
-    if (snapshot.empty) {
-      bot.sendMessage(chatId, "⚠️ सध्या कोणताही सामना थेट (LIVE) सुरू नाही.");
-      return;
-    }
-    let reply = `🔴 *चालू असलेले सामने (LIVE Matches):*\n\n`;
-    snapshot.forEach(doc => {
-      const data = doc.data();
-      reply += `📌 *${data.name || 'Tournament'}*\n🎮 Mode: ${data.mode || 'SOLO'} | Map: ${data.map || 'Bermuda'}\n\n`;
-    });
-    bot.sendMessage(chatId, reply, { parse_mode: 'Markdown' });
-  } catch (error) {
-    bot.sendMessage(chatId, "डेटा लोड करताना अडचण आली.");
-  }
+bot.onText(/\/my_matches/, async (msg) => {
+  await sendMyMatches(msg.chat.id);
+});
+
+// Feature 1: Check Current Room ID & Password
+bot.onText(/\/room/, async (msg) => {
+  await sendRoomDetails(msg.chat.id);
 });
 
 bot.onText(/\/updates/, (msg) => {
@@ -102,29 +145,141 @@ bot.onText(/\/help/, (msg) => {
   sendHelp(msg.chat.id);
 });
 
-// Helper Functions
+// 7. Helper Business Logic
+
 async function sendTournaments(chatId) {
   try {
-    const snapshot = await db.collection('tournaments').limit(5).get();
+    const snapshot = await db.collection('tournaments').limit(6).get();
     if (snapshot.empty) {
-      bot.sendMessage(chatId, "⚠️ कोणतीही टूर्नामेंट सापडली नाही.");
-      return;
+      return bot.sendMessage(chatId, "⚠️ *No tournaments available right now.*", { parse_mode: 'Markdown' });
     }
-    let reply = `🏆 *टूर्नामेंट्स यादी:*\n\n`;
+
+    let reply = `🏆 *Available Tournaments:*\n\n`;
     snapshot.forEach(doc => {
       const t = doc.data();
-      reply += `📌 *${t.name || 'Tournament'}*\n🎮 Mode: ${t.mode || 'SOLO'} | Map: ${t.map || 'Bermuda'}\n\n`;
+      reply += `📌 *${t.name || 'Tournament'}*\n` +
+               `🎮 Mode: ${t.mode \vert{}\vert{} 'SOLO'} \vert{} Map:${t.map || 'Bermuda'}\n` +
+               `💰 Entry: ${t.entryFee ? '₹' + t.entryFee : 'Free'} \vert{} Prize: ₹${t.prizePool || '0'}\n` +
+               `📅 Status: *${t.status || 'UPCOMING'}*\n\n`;
     });
     bot.sendMessage(chatId, reply, { parse_mode: 'Markdown' });
   } catch (e) {
-    bot.sendMessage(chatId, "डेटाबेस लोड करताना त्रुटी आली.");
+    bot.sendMessage(chatId, "❌ Error retrieving tournaments list.");
   }
 }
 
+async function sendMyMatches(chatId) {
+  try {
+    const userDoc = await db.collection('telegram_users').doc(String(chatId)).get();
+    if (!userDoc.exists || !userDoc.data().appUid) {
+      return bot.sendMessage(
+        chatId,
+        `⚠️ *Account not linked yet!*\n\nPlease link your app account first using:\n\`/link YOUR_APP_USER_ID\``,
+        { parse_mode: 'Markdown' }
+      );
+    }
+
+    const appUid = userDoc.data().appUid;
+    const snap = await db.collection('registrations').where('userId', '==', appUid).limit(5).get();
+
+    if (snap.empty) {
+      return bot.sendMessage(chatId, `ℹ️ No registered matches found for User ID: \`${appUid}\`.`, { parse_mode: 'Markdown' });
+    }
+
+    let reply = `🎮 *Your Registered Matches:*\n\n`;
+    snap.forEach(doc => {
+      const reg = doc.data();
+      reply += `📌 *${reg.tournamentName || 'Tournament'}*\n` +
+               `📅 Slot: ${reg.slotNumber || 'Confirmed'}\n` +
+               `🔥 Status: ${reg.status || 'Ready'}\n\n`;
+    });
+    bot.sendMessage(chatId, reply, { parse_mode: 'Markdown' });
+  } catch (e) {
+    bot.sendMessage(chatId, "❌ Failed to load your registered matches.");
+  }
+}
+
+async function sendRoomDetails(chatId) {
+  try {
+    const userDoc = await db.collection('telegram_users').doc(String(chatId)).get();
+    if (!userDoc.exists || !userDoc.data().appUid) {
+      return bot.sendMessage(
+        chatId,
+        `🔒 *Access Restricted*\n\nPlease link your app account using \`/link <USER_ID>\` to view your active Room ID and Password.`,
+        { parse_mode: 'Markdown' }
+      );
+    }
+
+    // Checking for live tournaments with active credentials
+    const snap = await db.collection('tournaments').where('status', 'in', ['LIVE', 'STARTING', 'UPCOMING']).limit(5).get();
+    let found = false;
+    let reply = `🔑 *Active Room Credentials:*\n\n`;
+
+    snap.forEach(doc => {
+      const t = doc.data();
+      if (t.roomId && t.roomPassword) {
+        found = true;
+        reply += `🏆 *${t.name}*\n` +
+                 `🆔 Room ID: \`${t.roomId}\`\n` +
+                 `🔑 Password: \`${t.roomPassword}\`\n\n` +
+                 `_Please do not share these details with non-registered players._\n\n`;
+      }
+    });
+
+    if (!found) {
+      return bot.sendMessage(chatId, "⚠️ *No Room credentials have been released yet.* Details are published 15 minutes before match start.", { parse_mode: 'Markdown' });
+    }
+
+    bot.sendMessage(chatId, reply, { parse_mode: 'Markdown' });
+  } catch (e) {
+    bot.sendMessage(chatId, "❌ Unable to fetch room credentials at this time.");
+  }
+}
+
+function sendLinkInstructions(chatId) {
+  const text = `🔗 *How to Link Your Account:*\n\n` +
+    `1. Open the *TOURNAX App*\n` +
+    `2. Go to your *Profile* tab and copy your *User ID*\n` +
+    `3. Send the command here:\n\n` +
+    `\`/link YOUR_USER_ID\`\n\n` +
+    `_Once linked, your Room IDs and match notifications will be delivered here automatically!_`;
+  bot.sendMessage(chatId, text, { parse_mode: 'Markdown' });
+}
+
 function sendUpdates(chatId) {
-  bot.sendMessage(chatId, "📢 *TOURNAX Official Updates*\n\nसर्व अपडेट्ससाठी ग्रुप जॉइन करा:\n👉 [TOURNAX Updates](https://t.me/TournaxAssistantBot)", { parse_mode: 'Markdown' });
+  bot.sendMessage(
+    chatId,
+    `📢 *TOURNAX Official Announcements*\n\nStay ahead with daily schedules, updates, and giveaways:\n👉 [Join Official Updates Channel](https://t.me/TournaxAssistantBot)`,
+    { parse_mode: 'Markdown', disable_web_page_preview: true }
+  );
 }
 
 function sendHelp(chatId) {
-  bot.sendMessage(chatId, "ℹ️ *कमांड्स:*\n/tournaments - सर्व टूर्नामेंट्स\n/matches - लाईव्ह सामने\n/updates - चॅनेल लिंक\n/help - माहिती");
+  const helpText = `ℹ️ *TOURNAX Bot Commands Guide:*\n\n` +
+    `• /start - Refresh and show main menu\n` +
+    `• /tournaments - View upcoming tournaments\n` +
+    `• /my_matches - View matches you registered for\n` +
+    `• /room - Check match Room ID & Password\n` +
+    `• /link <USER_ID> - Link your TOURNAX app account\n` +
+    `• /updates - Official channel links\n` +
+    `• /help - Command list & support`;
+  bot.sendMessage(chatId, helpText, { parse_mode: 'Markdown' });
 }
+
+// 8. Automated Background Match Notifier (Checks Firestore every 60s)
+setInterval(async () => {
+  try {
+    const notifySnap = await db.collection('notifications_queue').where('sent', '==', false).limit(10).get();
+    if (notifySnap.empty) return;
+
+    for (const doc of notifySnap.docs) {
+      const item = doc.data();
+      if (item.chatId && item.message) {
+        await bot.sendMessage(item.chatId, item.message, { parse_mode: 'Markdown' }).catch(console.error);
+        await doc.ref.update({ sent: true, sentAt: admin.firestore.FieldValue.serverTimestamp() });
+      }
+    }
+  } catch (e) {
+    // Silent catch for background worker
+  }
+}, 60000);
