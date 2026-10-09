@@ -91,8 +91,6 @@ bot.on('callback_query', async (query) => {
 });
 
 // 6. Direct Commands
-
-// Feature 2: Link App Account with Telegram (/link <APP_UID>)
 bot.onText(/\/link(?:\s+(.+))?/, async (msg, match) => {
   const chatId = msg.chat.id;
   const appUid = match[1] ? match[1].trim() : null;
@@ -132,7 +130,6 @@ bot.onText(/\/my_matches/, async (msg) => {
   await sendMyMatches(msg.chat.id);
 });
 
-// Feature 1: Check Current Room ID & Password
 bot.onText(/\/room/, async (msg) => {
   await sendRoomDetails(msg.chat.id);
 });
@@ -146,7 +143,6 @@ bot.onText(/\/help/, (msg) => {
 });
 
 // 7. Helper Business Logic
-
 async function sendTournaments(chatId) {
   try {
     const snapshot = await db.collection('tournaments').limit(6).get();
@@ -157,10 +153,16 @@ async function sendTournaments(chatId) {
     let reply = `🏆 *Available Tournaments:*\n\n`;
     snapshot.forEach(doc => {
       const t = doc.data();
+      const mode = t.mode || 'SOLO';
+      const map = t.map || 'Bermuda';
+      const fee = t.entryFee ? '₹' + t.entryFee : 'Free';
+      const prize = t.prizePool ? '₹' + t.prizePool : '₹0';
+      const status = t.status || 'UPCOMING';
+
       reply += `📌 *${t.name || 'Tournament'}*\n` +
-               `🎮 Mode: ${t.mode \vert{}\vert{} 'SOLO'} \vert{} Map:${t.map || 'Bermuda'}\n` +
-               `💰 Entry: ${t.entryFee ? '₹' + t.entryFee : 'Free'} \vert{} Prize: ₹${t.prizePool || '0'}\n` +
-               `📅 Status: *${t.status || 'UPCOMING'}*\n\n`;
+               `🎮 Mode: ${mode} \vert{} Map:${map}\n` +
+               `💰 Entry: ${fee} \vert{} Prize:${prize}\n` +
+               `📅 Status: *${status}*\n\n`;
     });
     bot.sendMessage(chatId, reply, { parse_mode: 'Markdown' });
   } catch (e) {
@@ -210,7 +212,6 @@ async function sendRoomDetails(chatId) {
       );
     }
 
-    // Checking for live tournaments with active credentials
     const snap = await db.collection('tournaments').where('status', 'in', ['LIVE', 'STARTING', 'UPCOMING']).limit(5).get();
     let found = false;
     let reply = `🔑 *Active Room Credentials:*\n\n`;
@@ -266,7 +267,7 @@ function sendHelp(chatId) {
   bot.sendMessage(chatId, helpText, { parse_mode: 'Markdown' });
 }
 
-// 8. Automated Background Match Notifier (Checks Firestore every 60s)
+// 8. Automated Background Match Notifier
 setInterval(async () => {
   try {
     const notifySnap = await db.collection('notifications_queue').where('sent', '==', false).limit(10).get();
@@ -280,6 +281,6 @@ setInterval(async () => {
       }
     }
   } catch (e) {
-    // Silent catch for background worker
+    // Background worker
   }
 }, 60000);
